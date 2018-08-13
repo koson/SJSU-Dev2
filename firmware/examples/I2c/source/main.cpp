@@ -8,6 +8,7 @@ constexpr uint8_t kFirstI2cAddress = 0x08;
 constexpr uint8_t kLastI2cAddress  = 0x78;
 
 constexpr uint8_t kAccelerometerAddress = 0x1C;
+constexpr uint8_t kTempAddress = 0x48;
 uint8_t initialization_sequence[]       = { 0x2A, 0x01 };
 uint8_t byte                            = 0x0D;
 
@@ -45,6 +46,16 @@ int main(void)
         DEBUG_PRINT("I2C transaction Status = 0x%02X",
                     static_cast<uint8_t>(status));
         DEBUG_PRINT("Accelerometer ID = 0x%02X", byte);
+
+        uint8_t temp_buffer[] = { 0x00, 0x00 };
+        status = i2c.Write(kTempAddress, temp_buffer, 1);
+        DEBUG_PRINT("Temp) I2C transaction Status = 0x%02X",
+                    static_cast<uint8_t>(status));
+
+        status = i2c.Read(kTempAddress, temp_buffer, 2);
+        DEBUG_PRINT("I2C transaction Status = 0x%02X",
+                    static_cast<uint8_t>(status));
+        DEBUG_PRINT("Temp = 0x%02X", temp_buffer[0] << 8 | temp_buffer[1]);
 
         DEBUG_PRINT("Waiting 5s before starting the scan again...");
         Delay(5000);

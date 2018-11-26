@@ -4,6 +4,8 @@
 PROJ    ?= firmware
 # Affects what DBC is generated for SJSUOne board
 ENTITY  ?= DBG
+# Optimization level
+OPT=0
 # Cause compiler warnings to become errors.
 # Used in presubmit checks to make sure that the codebase does not include
 # warnings
@@ -15,9 +17,16 @@ DEVICE_OBJDUMP = arm-none-eabi-objdump
 DEVICE_SIZEC   = arm-none-eabi-size
 DEVICE_OBJCOPY = arm-none-eabi-objcopy
 DEVICE_NM      = arm-none-eabi-nm
-# IMPORTANT: Must be accessible via the PATH variable!!!
-# Affects what DBC is generated for SJSUOne board
-TEST_GROUP     ?=
+# Set of tests you would like to run. Text must be surrounded by [] and be a set
+# comma deliminated.
+#
+#   Example of running only i2c and adc tests with the -s flag to show
+#   successful assertions:
+#
+#         make run-test TEST_ARGS="-s [i2c,adc]"
+#
+TEST_ARGS ?=
+# IMPORTANT: GCC must be accessible via the PATH environment variable
 HOST_CC        ?= gcc-7
 HOST_CPPC      ?= g++-7
 HOST_OBJDUMP   ?= objdump-7
@@ -46,25 +55,31 @@ ifeq ($(UNAME_S),Linux)
 CLANG_TIDY   = $(SJCLANG)/clang-tidy
 endif
 ifeq ($(UNAME_S),Darwin)
-CLANG_TIDY   = /usr/local/opt/llvm/bin/clang-tidy
+CLANG_TIDY   = /usr/local/opt/llvm@6/bin/clang-tidy
 endif
 
 # Internal build directories
 BUILD_DIR = build
-
 TEST_DIR  = $(BUILD_DIR)/test
+
+ifeq ($(MAKECMDGOALS), bootloader)
+BIN_DIR   = $(BUILD_DIR)/bootloader
+else
+BIN_DIR   = $(BUILD_DIR)/application
+endif
+
 ifeq ($(MAKECMDGOALS), test)
 OBJ_DIR   = $(TEST_DIR)/compiled
 else
-OBJ_DIR   = $(BUILD_DIR)/compiled
+OBJ_DIR   = $(BIN_DIR)/compiled
 endif
-BIN_DIR   = $(BUILD_DIR)/binaries
+
 DBC_DIR   = $(BUILD_DIR)/can-dbc
 COVERAGE  = $(BUILD_DIR)/coverage
 LIB_DIR   = $(SJLIBDIR)
 FIRMWARE  = $(SJBASE)/firmware
 TOOLS     = $(SJBASE)/tools
-COMPILED_HEADERS    = $(BUILD_DIR)/headers
+COMPILED_HEADERS  = $(BUILD_DIR)/headers
 CURRENT_DIRECTORY	= $(shell pwd)
 # Source files folder
 SOURCE    = source
@@ -81,10 +96,10 @@ endif
 # FLAGS #
 #########
 CORTEX_M4F = -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 \
-			 -fabi-version=0
-# CORTEX_M4F  = -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=softfp -mthumb
-OPTIMIZE  = -O0 -fmessage-length=0 -ffunction-sections -fdata-sections -fno-exceptions \
-               -fsingle-precision-constant -fasynchronous-unwind-tables
+			       -fabi-version=0 -finstrument-functions \
+			       -finstrument-functions-exclude-file-list=L0_LowLevel
+OPTIMIZE  = -O$(OPT) -fmessage-length=0 -ffunction-sections -fdata-sections \
+            -fno-exceptions -fomit-frame-pointer
 CPPOPTIMIZE = -fno-rtti
 DEBUG     = -g
 WARNINGS  = -Wall -Wextra -Wshadow -Wlogical-op -Wfloat-equal \
@@ -100,6 +115,7 @@ INCLUDES  = -I"$(CURRENT_DIRECTORY)/" \
 			-I"$(LIB_DIR)/" \
 			-isystem"$(LIB_DIR)/L0_LowLevel/SystemFiles" \
 			-isystem"$(LIB_DIR)/third_party/" \
+			-isystem"$(LIB_DIR)/third_party/printf" \
 			-isystem"$(LIB_DIR)/third_party/FreeRTOS/Source" \
 			-isystem"$(LIB_DIR)/third_party/FreeRTOS/Source/trace" \
 			-isystem"$(LIB_DIR)/third_party/FreeRTOS/Source/include" \
@@ -112,12 +128,11 @@ CFLAGS_COMMON = $(COMMON_FLAGS) $(INCLUDES) -MMD -MP -c
 
 ifeq ($(MAKECMDGOALS), test)
 CFLAGS = -fprofile-arcs -fPIC -fexceptions -fno-inline \
-         -fno-inline-small-functions -fno-default-inline \
-		 -fno-builtin \
+         -fno-inline-small-functions -fno-default-inline -fno-builtin \
          -ftest-coverage --coverage \
-         -fno-elide-constructors -D HOST_TEST=1 \
+				 -Wno-unused -fno-elide-constructors -D HOST_TEST=1 \
          $(filter-out $(CORTEX_M4F) $(OPTIMIZE), $(CFLAGS_COMMON)) \
-         -O0
+         -O0 -g
 CPPFLAGS = $(CFLAGS)
 else
 CFLAGS = $(CFLAGS_COMMON)
@@ -127,18 +142,15 @@ endif
 ifeq ($(MAKECMDGOALS), bootloader)
 LINKER = $(LIB_DIR)/LPC4078_bootloader.ld
 CFLAGS += -D BOOTLOADER=1
-LINK_PRINTF_FLOAT =
 else
 LINKER = $(LIB_DIR)/LPC4078_application.ld
 CFLAGS += -D APPLICATION=1
-LINK_PRINTF_FLOAT = -u _printf_float
 endif
 
 LINKFLAGS = $(COMMON_FLAGS) \
     -T $(LINKER) \
-    -Xlinker \
-    --gc-sections -Wl,-Map,"$(MAP)" \
-	-lc -lrdimon $(LINK_PRINTF_FLOAT) \
+    -Wl,--gc-sections \
+		-Wl,-Map,"$(MAP)" \
     -specs=nano.specs
 ##############
 # Test files #
@@ -154,13 +166,13 @@ SOURCE_TESTS  = $(shell find $(SOURCE) \
                          2> /dev/null)
 # Find all library that end with "_test.cpp"
 LIBRARY_TESTS = $(shell find "$(LIB_DIR)" -name "*_test.cpp" | \
-						 $(FILE_EXCLUDES))
+						    $(FILE_EXCLUDES))
 TESTS = $(SOURCE_TESTS) $(LIBRARY_TESTS)
 OMIT_LIBRARIES = $(shell find "$(LIB_DIR)" \
                          -name "startup.cpp" -o \
                          -name "*.cpp" \
                          -path "$(LIB_DIR)/third_party/*" -o \
-						 -path "$(LIB_DIR)/third_party/*")
+						             -path "$(LIB_DIR)/third_party/*")
 OMIT_SOURCES   = $(shell find $(SOURCE) -name "main.cpp")
 OMIT = $(OMIT_LIBRARIES) $(OMIT_SOURCES)
 ################
@@ -182,6 +194,8 @@ SOURCE_HEADERS  = $(shell find $(SOURCE) \
                          -name "*.h" -o \
                          -name "*.hpp" \
                          2> /dev/null)
+PRINTF_3P_LIBRARY = $(shell find "$(LIB_DIR)/third_party/printf" \
+                         -name "*.cpp" 2> /dev/null)
 ##############
 # Lint files #
 ##############
@@ -190,12 +204,13 @@ LINT_FILES      = $(shell find $(FIRMWARE) \
                          -name "*.hpp" -o \
                          -name "*.c"   -o \
                          -name "*.cpp" | \
-						 $(FILE_EXCLUDES) \
+						             $(FILE_EXCLUDES) \
                          2> /dev/null)
 # Remove all test files from SOURCE_FILES
 SOURCES     = $(filter-out $(SOURCE_TESTS), $(SOURCE_FILES))
 ifeq ($(MAKECMDGOALS), test)
-COMPILABLES = $(filter-out $(OMIT), $(LIBRARIES) $(SOURCES) $(TESTS))
+COMPILABLES = $(filter-out $(OMIT), $(LIBRARIES) $(SOURCES) $(TESTS)) \
+              $(PRINTF_3P_LIBRARY)
 else
 COMPILABLES = $(LIBRARIES) $(SOURCES)
 endif
@@ -312,10 +327,11 @@ $(SIZE): $(EXECUTABLE)
 	@echo 'Finished building: $@'
 	@echo ' '
 
+#--line-numbers --disassemble --source
 $(LIST): $(EXECUTABLE)
 	@echo ' '
 	@echo 'Invoking: Cross ARM GNU Create Assembly Listing'
-	@$(OBJDUMP) --source --all-headers --demangle --line-numbers --wide "$<" > "$@"
+	@$(OBJDUMP) --disassemble --all-headers --source --demangle --wide "$<" > "$@"
 	@echo 'Finished building: $@'
 	@echo ' '
 
@@ -381,11 +397,11 @@ $(DBC_DIR):
 
 $(OBJ_DIR):
 	@echo 'Creating Objects Folder: $<'
-	mkdir $(OBJ_DIR)
+	mkdir -p $(OBJ_DIR)
 
 $(BIN_DIR):
 	@echo 'Creating Binary Folder: $<'
-	mkdir $(BIN_DIR)
+	mkdir -p $(BIN_DIR)
 
 clean:
 	rm -fR $(BUILD_DIR)
@@ -393,7 +409,7 @@ clean:
 flash: build
 	@bash -c "\
 	source $(TOOLS)/Hyperload/modules/bin/activate && \
-	python2.7 $(TOOLS)/Hyperload/hyperload.py $(SJDEV) $(HEX)"
+	python $(TOOLS)/Hyperload/hyperload.py -b 576000 -c 48000000 -a clocks -d $(SJDEV) $(HEX)"
 
 telemetry:
 	@bash -c "\
@@ -401,21 +417,18 @@ telemetry:
 	python2.7 $(TOOLS)/Telemetry/telemetry.py"
 
 test: $(COVERAGE) $(TEST_EXEC)
-	@valgrind --leak-check=full --track-origins=yes -v \
-		$(TEST_EXEC) -s $(TEST_GROUP)
+
+run-test:
+	@valgrind --leak-check=full --track-origins=yes -v $(TEST_EXEC) $(TEST_ARGS)
 	@gcovr --root $(FIRMWARE) --keep --object-directory $(BUILD_DIR) \
 		-e "$(LIB_DIR)/newlib" \
 		-e "$(LIB_DIR)/third_party" \
 		--html --html-details -o $(COVERAGE)/coverage.html
 
-test-all: $(COVERAGE) $(TEST_EXEC)
-
 $(COVERAGE):
 	mkdir -p $(COVERAGE)
 
 $(TEST_EXEC): $(TEST_FRAMEWORK) $(OBJECT_FILES)
-	@echo " \\──────────────────────────────/"
-	@echo "  \\ Generating test executable /"
 	@mkdir -p "$(dir $@)"
 	@echo 'Finished building target: $@'
 	@$(CPPC) -fprofile-arcs -fPIC -fexceptions -fno-inline \
@@ -424,11 +437,6 @@ $(TEST_EXEC): $(TEST_FRAMEWORK) $(OBJECT_FILES)
          -fno-elide-constructors -lgcov \
          -fprofile-arcs -ftest-coverage -fPIC -O0 \
          -o $(TEST_EXEC) $(OBJECT_FILES)
-	@echo "   \\──────────────────────────/"
-	@echo "    \\       Finished         /"
-	@echo "     \\──────────────────────/"
-	@echo "      \\    Running Test    /"
-	@echo "       \\──────────────────/"
 
 %.hpp.gch: %.hpp
 	@echo 'Precompiling HPP file: $<'
@@ -444,7 +452,7 @@ lint:
 
 tidy:
 	@$(CLANG_TIDY) -extra-arg=-std=c++17 $(LINT_FILES) -- -std=c++17 \
-	$(INCLUDES) -D CLANG_TIDY=1
+	$(INCLUDES) -D CLANG_TIDY=1 -D HOST_TEST=1
 
 presubmit:
 	@$(TOOLS)/presubmit.sh

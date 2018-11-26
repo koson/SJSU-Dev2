@@ -1,96 +1,65 @@
-// This file is meant for general purpose macros that can be used across the
-// SJSU-Dev2 environment.
+/// @ingroup SJSU-Dev2
+/// @defgroup Macros Utility Macros
+/// @brief This module is meant for general purpose macros that can be used
+/// across the SJSU-Dev2 environment.
+/// @{
 #pragma once
 #include "config.hpp"
-#include "L2_Utilities/ansi_terminal_codes.hpp"
-#include "L2_Utilities/backtrace.hpp"
-#include "L2_Utilities/debug_print.hpp"
+// SJ2_FUNCTION_INLINE will cause a function to be inlined at the call site.
+// This means that, rather than actually call the function, the functions
+// contents will be copied to the location where the function was called.
+// This saves the cpu from having to setup for a function call.
+#define SJ2_FUNCTION_INLINE(function) function __attribute__((always_inline))
 // SJ2_SECTION will place a variable or function within a given section of the
 // executable. It uses both attribute "section" and "used". Section attribute
 // places variable/function into that section and "used" labels the symbol as
 // used to ensure that the compiler does remove this symbol at link time.
 #if defined(__APPLE__)
 #define SJ2_SECTION(section_name) \
-    __attribute__((used, section("__TEXT," section_name)))
+  __attribute__((used, section("__TEXT," section_name)))
 #else
 #define SJ2_SECTION(section_name) __attribute__((used, section(section_name)))
 #endif
-// SJ2_USED will use void casting as a means to convince the compiler that the
-// variable has been used in the software, to remove compiler warnings about
-// unused variables.
-// NOTE: this will not stop the compiler from optimizing this variable out.
-#define SJ2_USED(variable) (void)variable
-// These macros are used to stringify define values. For example:
-//
-//      #define VALUE true
-//      #define STRING "value = " STRINGIFY(s) => "value = true"
-//
+/// DO NOT USE this macro directly. Use the C++17 attribute [[maybe_unused]]
+/// instead.
+/// _SJ2_USED will use void casting as a means to convince the compiler that the
+/// variable has been used in the software, to remove compiler warnings about
+/// unused variables.
+/// NOTE: this will not stop the compiler from optimizing this variable out.
+#define _SJ2_USED(variable) ((void)variable)
+/// SJ2_VARIADIC_USED can suppress unused parameter warnings within macros when
+/// supplied with __VA_ARGS__.
+inline void UsedVariadicFunction(...) {}
+#define SJ2_VARIADIC_USED(...)         \
+  if (false)                           \
+  {                                    \
+    UsedVariadicFunction(__VA_ARGS__); \
+  }
+/// These macros are used to stringify define values. For example:
+///
+///      #define VALUE true
+///      #define STRING "value = " STRINGIFY(s) => "value = true"
+///
 #define SJ2_STRINGIFY(s) SJ2_STRINGIFY2(s)
 #define SJ2_STRINGIFY2(s) #s
-// Returns the length of an array
-#define SJ2_ARRAY_LENGTH(array) sizeof(array) / sizeof(*array)
-// SJ2_PACKED give a specified type a packed attribute
+/// SJ2_PACKED give a specified type a packed attribute
 #define SJ2_PACKED(type) type __attribute__((packed))
-// Set a function as a "weak" function. This means that if there is another
-// declaration of this exact function somewhere else in the software, the
-// non-weak function will be used instead of the weak function.
+// SJ2_IGNORE_STACK_TRACE will remove function profiling for this
+// specific function which means it will not be recoreded in the stack_trace
+// array and will not show up when a SJ2_DUMP_BACKTRACE() is called.
+#define SJ2_IGNORE_STACK_TRACE(function) \
+  function __attribute__((no_instrument_function))
+/// Set a function as a "weak" function. This means that if there is another
+/// declaration of this exact function somewhere else in the software, the
+/// non-weak function will be used instead of the weak function.
 #define SJ2_WEAK __attribute__((weak))
-// Similar to the weak attribute, but also gives each function the
-// implementation of the function f.
+/// Similar to the weak attribute, but also gives each function the
+/// implementation of the function f.
 #if defined(__APPLE__)
 #define SJ2_ALIAS(f) \
-    {                \
-    }
+  {                  \
+  }
 #else
-#define SJ2_ALIAS(f) __attribute__((weak, alias(#f)))  // NOLINT
+#define SJ2_ALIAS(f) \
+  __attribute__((weak, alias(#f), no_instrument_function))  // NOLINT
 #endif
-#if defined SJ2_INCLUDE_BACKTRACE && SJ2_INCLUDE_BACKTRACE == true
-#define SJ2_DUMP_BACKTRACE() PrintTrace()
-#else
-#define SJ2_DUMP_BACKTRACE() \
-    do                       \
-    {                        \
-    } while (0)
-#endif  // defined SJ2_INCLUDE_BACKTRACE && SJ2_INCLUDE_BACKTRACE == true
-
-#define SJ2_ASSERT_WARNING(condition, warning_message, ...)          \
-    do                                                               \
-    {                                                                \
-        if (!(condition))                                            \
-        {                                                            \
-            DEBUG_PRINT("\n" SJ2_BACKGROUND_RED                      \
-                        "WARNING: " warning_message SJ2_COLOR_RESET, \
-                        ##__VA_ARGS__);                              \
-        }                                                            \
-    } while (0)
-
-#define SJ2_ASSERT_FATAL_WITH_DUMP(with_dump, condition, fatal_message, ...)  \
-    do                                                                        \
-    {                                                                         \
-        if (!(condition))                                                     \
-        {                                                                     \
-            DEBUG_PRINT("\n" SJ2_BACKGROUND_RED                               \
-                        "ERROR: " fatal_message SJ2_COLOR_RESET,              \
-                        ##__VA_ARGS__);                                       \
-            if ((with_dump))                                                  \
-            {                                                                 \
-                printf("\nPrinting Stack Trace:\n");                          \
-                SJ2_DUMP_BACKTRACE();                                         \
-                printf(                                                       \
-                    "\nRun: the following command in your project directory"  \
-                    "\n\n    " SJ2_BOLD_WHITE                                 \
-                    "arm-none-eabi-addr2line -e build/binaries/firmware.elf " \
-                    "<insert pc>" SJ2_COLOR_RESET                             \
-                    "\n\n"                                                    \
-                    "This will report the file and line number associated "   \
-                    "with that program counter values above.");               \
-            }                                                                 \
-            while (true)                                                      \
-            {                                                                 \
-                continue;                                                     \
-            }                                                                 \
-        }                                                                     \
-    } while (0)
-
-#define SJ2_ASSERT_FATAL(condition, fatal_message, ...) \
-    SJ2_ASSERT_FATAL_WITH_DUMP(true, (condition), fatal_message, ##__VA_ARGS__)
